@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "voidfluid",
+  "version": "${version}",
+  "name": "Void Fluid",
+  "description": "Removes water and lava around the player when fully submerged.",
+  "authors": ["You"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": { "main": ["com.example.voidfluid.VoidFluid"] },
+  "depends": {
+    "fabricloader": ">=0.18.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
