@@ -5,57 +5,69 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
-import net.minecraft.block.FluidBlock;
-import net.minecraft.fluid.FluidState;
-import net.minecraft.registry.tag.FluidTags;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.state.property.Properties;
-import net.minecraft.util.math.Box;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
+import net.minecraft.world.chunk.ChunkSection;
+import net.minecraft.world.chunk.WorldChunk;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+/**
+ * Удаляет ВСЮ лаву (источники и потоки) во всех загруженных чанках
+ * вокруг игроков, во всех измерениях.
+ */
 public class VoidFluid implements ModInitializer {
-    /** Радиус очистки вокруг игрока (в блоках). */
-    public static final int RADIUS = 3;
+    public static final Logger LOGGER = LoggerFactory.getLogger("voidfluid");
+
+    /** Радиус сканирования в чанках вокруг каждого игрока. */
+    public static final int SCAN_CHUNKS = 8;
+    /** Как часто сканировать (в тиках). 5 тиков = 4 раза в секунду. */
+    public static final int INTERVAL = 5;
 
     @Override
     public void onInitialize() {
+        LOGGER.info("VoidFluid: lava purge loaded");
         ServerTickEvents.END_WORLD_TICK.register(world -> {
+            if (world.getTime() % INTERVAL != 0) return;
             for (ServerPlayerEntity player : world.getPlayers()) {
-                if (player.isSpectator()) continue;
-                if (touchesFluid(world, player.getBoundingBox())) {
-                    clearFluid(world, player.getBlockPos());
+                ChunkPos c = player.getChunkPos();
+                for (int dx = -SCAN_CHUNKS; dx <= SCAN_CHUNKS; dx++) {
+                    for (int dz = -SCAN_CHUNKS; dz <= SCAN_CHUNKS; dz++) {
+                        WorldChunk chunk = world.getChunkManager().getWorldChunk(c.x + dx, c.z + dz);
+                        if (chunk != null) purgeLava(world, chunk);
+                    }
                 }
             }
         });
     }
 
-    /** true, если хоть часть тела игрока касается воды или лавы. */
-    private static boolean touchesFluid(ServerWorld world, Box box) {
-        Box b = box.expand(0.2);
-        BlockPos min = BlockPos.ofFloored(b.minX, b.minY, b.minZ);
-        BlockPos max = BlockPos.ofFloored(b.maxX, b.maxY, b.maxZ);
-        for (BlockPos pos : BlockPos.iterate(min, max)) {
-            if (isWaterOrLava(world.getFluidState(pos))) return true;
-        }
-        return false;
-    }
+    private static void purgeLava(ServerWorld world, WorldChunk chunk) {
+        ChunkSection[] sections = chunk.getSectionArray();
+        int baseSection = chunk.getBottomSectionCoord();
+        BlockPos.Mutable pos = new BlockPos.Mutable();
 
-    private static boolean isWaterOrLava(FluidState fs) {
-        return !fs.isEmpty() && (fs.isIn(FluidTags.WATER) || fs.isIn(FluidTags.LAVA));
-    }
+        for (int i = 0; i < sections.length; i++) {
+            ChunkSection section = sections[i];
+            // быстрая проверка: есть ли в секции лава вообще
+            if (section == null || section.isEmpty()) continue;
+            if (!section.hasAny(s -> s.isOf(Blocks.LAVA))) continue;
 
-    private static void clearFluid(ServerWorld world, BlockPos center) {
-        BlockPos min = center.add(-RADIUS, -RADIUS, -RADIUS);
-        BlockPos max = center.add(RADIUS, RADIUS, RADIUS);
-        for (BlockPos pos : BlockPos.iterate(min, max)) {
-            if (!isWaterOrLava(world.getFluidState(pos))) continue;
-
-            BlockState state = world.getBlockState(pos);
-            if (state.getBlock() instanceof FluidBlock) {
-                world.setBlockState(pos, Blocks.AIR.getDefaultState(), Block.NOTIFY_LISTENERS);
-            } else if (state.contains(Properties.WATERLOGGED) && state.get(Properties.WATERLOGGED)) {
-                world.setBlockState(pos, state.with(Properties.WATERLOGGED, false), Block.NOTIFY_LISTENERS);
+            int y0 = (baseSection + i) << 4;
+            int x0 = chunk.getPos().getStartX();
+            int z0 = chunk.getPos().getStartZ();
+            for (int y = 0; y < 16; y++) {
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        pos.set(x0 + x, y0 + y, z0 + z);
+                        BlockState state = chunk.getBlockState(pos);
+                        if (state.isOf(Blocks.LAVA)) {
+                            world.setBlockState(pos, Blocks.AIR.getDefaultState(),
+                                    Block.NOTIFY_LISTENERS);
+                        }
+                    }
+                }
             }
         }
     }
